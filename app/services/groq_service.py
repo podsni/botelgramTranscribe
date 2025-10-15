@@ -61,6 +61,9 @@ class TranscriptionResult:
 class GroqTranscriber:
     """Wrapper around Groq Whisper transcription API."""
 
+    provider_name = "groq"
+    max_payload_bytes = 25 * 1024 * 1024  # Groq Whisper recommends payloads <= 25MB.
+
     def __init__(
         self,
         api_key: str,

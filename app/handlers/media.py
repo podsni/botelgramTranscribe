@@ -3,19 +3,28 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 import subprocess
-import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from aiogram import Router
 from aiogram.types import Message, BufferedInputFile
 from aiogram.utils.chat_action import ChatActionSender
-from telethon import TelegramClient
-from telethon.errors import RPCError
+from requests import HTTPError
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TransferSpeedColumn,
+)
 
-from ..services import GroqTranscriber, TranscriptionResult
+from ..services import TelethonDownloadService, TranscriptionResult
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +33,8 @@ router = Router()
 TELEGRAM_FILE_DOWNLOAD_LIMIT = 2 * 1024 * 1024 * 1024  # 2 GB via MTProto.
 TELEGRAM_MESSAGE_LIMIT = 4000
 AUDIO_CONVERSION_THRESHOLD = 15 * 1024 * 1024  # Convert to mp3 when file size >= 15MB.
+PROGRESS_BAR_THRESHOLD = 50 * 1024 * 1024  # Show progress bar for downloads >= 50MB.
+DEFAULT_PAYLOAD_LIMIT = 25 * 1024 * 1024  # Fallback payload limit (~25MB).
 
 
 @dataclass
@@ -36,8 +47,8 @@ class MediaMeta:
 @router.message()
 async def handle_media(
     message: Message,
-    telethon_client: TelegramClient,
-    transcriber: GroqTranscriber,
+    telethon_downloader: TelethonDownloadService,
+    transcriber: Any,
 ) -> None:
     meta = _pick_media(message)
     if not meta:
@@ -50,49 +61,71 @@ async def handle_media(
         )
         return
 
-    temp_file, temp_dir = _build_temp_file(meta)
-    cleanup_paths = {temp_file}
+    download_path = _build_download_path(meta)
+
+    provider_name = getattr(transcriber, "provider_name", "transcriber")
+    payload_limit = getattr(transcriber, "max_payload_bytes", DEFAULT_PAYLOAD_LIMIT)
 
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
         try:
-            await _download_media(telethon_client, message, temp_file)
-            logger.info("Downloaded media to %s", temp_file)
+            logger.info(
+                "Starting download for %s (%s bytes) in chat %s",
+                meta.display_name,
+                meta.file_size,
+                message.chat.id,
+            )
+            await _download_media(telethon_downloader, message, download_path, meta)
+            logger.info(
+                "Download complete: %s (%s bytes)",
+                download_path,
+                download_path.stat().st_size if download_path.exists() else "unknown",
+            )
 
             prepared_path = await asyncio.to_thread(
                 _prepare_audio_for_transcription,
-                temp_file,
+                download_path,
                 meta.file_size,
             )
-            if prepared_path != temp_file:
-                cleanup_paths.add(prepared_path)
 
+            try:
+                payload_size = prepared_path.stat().st_size
+            except OSError:
+                payload_size = None
+
+            if payload_limit and payload_size and payload_size > payload_limit:
+                logger.warning(
+                    "Prepared audio %s is %s bytes, exceeds payload limit for provider %s.",
+                    prepared_path,
+                    payload_size,
+                    provider_name,
+                )
+                limit_mb = payload_limit / (1024 * 1024)
+                await message.answer(
+                    "File sudah dikonversi, tetapi masih terlalu besar untuk "
+                    f"provider {provider_name} (maks sekitar {limit_mb:.1f}MB). "
+                    "Silakan kompres lagi atau kirim bagian yang lebih pendek."
+                )
+                return
+
+            logger.info("Starting transcription via %s for %s", provider_name, prepared_path)
             result = await asyncio.to_thread(transcriber.transcribe, prepared_path)
             await _deliver_transcription(message, result)
-        except RPCError as rpc_error:
-            logger.exception("Telethon failed to fetch media")
-            await message.answer(
-                f"Gagal mengambil media melalui MTProto: {rpc_error}. "
-                "Pastikan bot memiliki akses ke percakapan ini."
-            )
-        except subprocess.CalledProcessError:
-            logger.exception("Failed to convert media to mp3 via ffmpeg")
-            await message.answer(
-                "Gagal mengonversi media ke format mp3. Pastikan ffmpeg terpasang pada server."
-            )
+        except HTTPError as http_err:
+            logger.exception("%s API error during transcription", provider_name.capitalize())
+            status_code = http_err.response.status_code if http_err.response is not None else None
+            if status_code == 413:
+                await message.answer(
+                    f"{provider_name.capitalize()} menolak file karena terlalu besar (HTTP 413). "
+                    "Silakan kompres ulang sebelum mencoba lagi."
+                )
+            else:
+                await message.answer(
+                    f"{provider_name.capitalize()} API mengembalikan kesalahan: "
+                    f"{status_code or http_err}"
+                )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unhandled error while processing media")
             await message.answer(f"Gagal memproses file: {exc}")
-        finally:
-            for path in cleanup_paths:
-                try:
-                    if path.exists():
-                        path.unlink()
-                except OSError:
-                    logger.warning("Failed to delete temporary file %s", path, exc_info=True)
-            try:
-                temp_dir.rmdir()
-            except OSError:
-                logger.warning("Failed to remove temporary directory %s", temp_dir, exc_info=True)
 
 
 def _pick_media(message: Message) -> Optional[MediaMeta]:
@@ -135,66 +168,126 @@ def _pick_media(message: Message) -> Optional[MediaMeta]:
     return None
 
 
-def _build_temp_file(meta: MediaMeta) -> tuple[Path, Path]:
-    temp_dir = Path(tempfile.mkdtemp(prefix="transhades_"))
+def _build_download_path(meta: MediaMeta) -> Path:
+    downloads_dir = Path.home() / "Downloads" / "transhades"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    sanitized = _sanitize_filename(meta.display_name)
     suffix = meta.suffix or ".bin"
-    temp_file = temp_dir / f"input{suffix}"
-    return temp_file, temp_dir
+    filename = sanitized if sanitized.endswith(suffix) else f"{sanitized}{suffix}"
+    return downloads_dir / f"{timestamp}_{filename}"
+
+
+def _sanitize_filename(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", name or "media")
+    return cleaned.strip("_") or "media"
 
 
 async def _download_media(
-    telethon_client: TelegramClient,
+    downloader: TelethonDownloadService,
     message: Message,
     target_path: Path,
+    meta: MediaMeta,
 ) -> None:
-    entity = await telethon_client.get_entity(message.chat.id)
-    telegram_message = await telethon_client.get_messages(entity, ids=message.message_id)
+    progress: Progress | None = None
+    task_id: int | None = None
 
-    if not telegram_message:
-        raise RuntimeError("Tidak menemukan media pada pesan tersebut.")
+    def progress_callback(current: int, total: int) -> None:
+        if progress and task_id is not None:
+            progress.update(task_id, completed=current, total=total or meta.file_size or 0)
 
-    result = await telethon_client.download_media(telegram_message, file=str(target_path))
-    if not result:
-        raise RuntimeError("Download media melalui Telethon gagal.")
+    if (meta.file_size or 0) >= PROGRESS_BAR_THRESHOLD:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            TimeElapsedColumn(),
+            transient=True,
+        )
+        progress.start()
+        total_size = meta.file_size if (meta.file_size and meta.file_size > 0) else None
+        task_id = progress.add_task(
+            description=f"Mendownload {meta.display_name}",
+            total=total_size,
+        )
+        logger.info("Progress bar diaktifkan untuk unduhan besar.")
+
+    try:
+        await downloader.download_media(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            file_path=str(target_path),
+            progress_callback=progress_callback if progress else None,
+        )
+    finally:
+        if progress:
+            progress.stop()
 
 
 def _prepare_audio_for_transcription(source_path: Path, file_size: Optional[int]) -> Path:
-    if file_size is None:
-        logger.info("Skipping conversion for %s (ukuran tidak diketahui).", source_path)
+    if not source_path.exists():
+        logger.warning("Source path %s tidak ditemukan.", source_path)
         return source_path
 
-    if file_size < AUDIO_CONVERSION_THRESHOLD:
-        logger.info(
-            "Skipping conversion for %s (size %s bytes below threshold).",
-            source_path,
-            file_size,
-        )
+    actual_size = file_size or source_path.stat().st_size
+    suffix = source_path.suffix.lower()
+    should_convert = actual_size >= AUDIO_CONVERSION_THRESHOLD or suffix != ".mp3"
+
+    if not should_convert:
+        logger.info("Skipping conversion for %s (size %s bytes below threshold).", source_path, actual_size)
         return source_path
 
-    target_path = source_path.with_suffix(".mp3")
+    if suffix == ".mp3":
+        target_path = source_path.with_name(f"{source_path.stem}_compressed.mp3")
+    else:
+        target_path = source_path.with_suffix(".mp3")
+
     logger.info(
         "Converting %s (%s bytes) to mp3 at %s",
         source_path,
-        file_size,
+        actual_size,
         target_path,
     )
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(source_path),
-            "-vn",
-            "-acodec",
-            "mp3",
-            str(target_path),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    logger.info("Conversion complete for %s", target_path)
-    return target_path
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-b:a",
+        "96k",
+        str(target_path),
+    ]
+
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.stderr:
+            logger.debug("ffmpeg stderr: %s", result.stderr.decode("utf-8", errors="ignore"))
+        try:
+            new_size = target_path.stat().st_size
+        except OSError:
+            new_size = "unknown"
+        logger.info("Conversion complete for %s (%s bytes).", target_path, new_size)
+        return target_path
+    except subprocess.CalledProcessError as err:
+        logger.error(
+            "ffmpeg conversion failed for %s: %s",
+            source_path,
+            err.stderr.decode("utf-8", errors="ignore"),
+        )
+        return source_path
 
 
 async def _deliver_transcription(message: Message, result: TranscriptionResult) -> None:
