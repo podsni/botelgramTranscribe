@@ -18,6 +18,7 @@ class DeepgramTranscriber:
 
     provider_name = "deepgram"
     max_payload_bytes = 50 * 1024 * 1024  # Deepgram streaming uploads support up to 50MB per request.
+    available_models = ("whisper", "nova-3")
 
     def __init__(
         self,
@@ -60,6 +61,16 @@ class DeepgramTranscriber:
         if not text:
             raise ValueError("Deepgram API response missing transcription text.")
         return TranscriptionResult(text=text, segments=segments)
+
+    def with_model(self, model: str) -> "DeepgramTranscriber":
+        selected = model if model in self.available_models else self.model
+        return DeepgramTranscriber(
+            api_key=self.api_key,
+            model=selected,
+            language=self.language,
+            smart_format=self.smart_format,
+            timeout=self.timeout,
+        )
 
     def _parse_response(self, payload: dict) -> tuple[str, Optional[List[dict]]]:
         results = payload.get("results", {})

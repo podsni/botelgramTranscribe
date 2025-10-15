@@ -25,6 +25,7 @@ from rich.progress import (
 )
 
 from ..services import (
+    DeepgramModelPreferences,
     ProviderPreferences,
     TranscriberRegistry,
     TelethonDownloadService,
@@ -55,6 +56,7 @@ async def handle_media(
     telethon_downloader: TelethonDownloadService,
     transcriber_registry: TranscriberRegistry,
     provider_preferences: ProviderPreferences,
+    deepgram_model_preferences: DeepgramModelPreferences,
 ) -> None:
     meta = _pick_media(message)
     if not meta:
@@ -83,7 +85,15 @@ async def handle_media(
         await message.answer("Tidak ada provider transkripsi yang tersedia saat ini.")
         return
 
-    provider_name = getattr(transcriber, "provider_name", requested_provider)
+    provider_key = getattr(transcriber, "provider_name", requested_provider)
+    provider_display = provider_key
+
+    if provider_key == "deepgram":
+        model = deepgram_model_preferences.get(message.chat.id)
+        if hasattr(transcriber, "with_model"):
+            transcriber = transcriber.with_model(model)
+        provider_display = f"deepgram ({model})"
+
     payload_limit = getattr(transcriber, "max_payload_bytes", DEFAULT_PAYLOAD_LIMIT)
 
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
@@ -118,30 +128,30 @@ async def handle_media(
                     "Prepared audio %s is %s bytes, exceeds payload limit for provider %s.",
                     prepared_path,
                     payload_size,
-                    provider_name,
+                    provider_display,
                 )
                 limit_mb = payload_limit / (1024 * 1024)
                 await message.answer(
                     "File sudah dikonversi, tetapi masih terlalu besar untuk "
-                    f"provider {provider_name} (maks sekitar {limit_mb:.1f}MB). "
+                    f"provider {provider_display} (maks sekitar {limit_mb:.1f}MB). "
                     "Silakan kompres lagi atau kirim bagian yang lebih pendek."
                 )
                 return
 
-            logger.info("Starting transcription via %s for %s", provider_name, prepared_path)
+            logger.info("Starting transcription via %s for %s", provider_display, prepared_path)
             result = await asyncio.to_thread(transcriber.transcribe, prepared_path)
             await _deliver_transcription(message, result)
         except HTTPError as http_err:
-            logger.exception("%s API error during transcription", provider_name.capitalize())
+            logger.exception("%s API error during transcription", provider_display.capitalize())
             status_code = http_err.response.status_code if http_err.response is not None else None
             if status_code == 413:
                 await message.answer(
-                    f"{provider_name.capitalize()} menolak file karena terlalu besar (HTTP 413). "
+                    f"{provider_display.capitalize()} menolak file karena terlalu besar (HTTP 413). "
                     "Silakan kompres ulang sebelum mencoba lagi."
                 )
             else:
                 await message.answer(
-                    f"{provider_name.capitalize()} API mengembalikan kesalahan: "
+                    f"{provider_display.capitalize()} API mengembalikan kesalahan: "
                     f"{status_code or http_err}"
                 )
         except Exception as exc:  # noqa: BLE001
@@ -262,48 +272,44 @@ def _prepare_audio_for_transcription(source_path: Path, file_size: Optional[int]
     actual_size = file_size or source_path.stat().st_size
     suffix = source_path.suffix.lower()
 
-    if suffix == ".mp3" and actual_size < AUDIO_CONVERSION_THRESHOLD:
+    if suffix == ".mp3":
+        if actual_size < AUDIO_CONVERSION_THRESHOLD:
+            logger.info(
+                "Skipping compression for %s (size %s bytes below threshold).",
+                source_path,
+                actual_size,
+            )
+            return source_path
+
         logger.info(
-            "Skipping compression for %s (size %s bytes below threshold).",
+            "Skipping re-encoding for %s (already mp3).",
             source_path,
-            actual_size,
+        )
+        logger.info(
+            "Menggunakan file mp3 original tanpa konversi ulang untuk menjaga kualitas.",
         )
         return source_path
 
     target_path: Path
     command: list[str]
 
-    if suffix == ".mp3":
-        target_path = source_path.with_name(f"{source_path.stem}_compressed.mp3")
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(source_path),
-            "-codec:a",
-            "libmp3lame",
-            "-b:a",
-            "112k",
-            str(target_path),
-        ]
-    else:
-        target_path = source_path.with_suffix(".mp3")
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(source_path),
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-codec:a",
-            "libmp3lame",
-            "-b:a",
-            "96k",
-            str(target_path),
-        ]
+    target_path = source_path.with_suffix(".mp3")
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        "96k",
+        str(target_path),
+    ]
 
     logger.info(
         "Converting %s (%s bytes) to %s at %s",

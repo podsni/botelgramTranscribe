@@ -10,6 +10,7 @@ from .config import Settings, load_settings
 from .handlers import build_router
 from .middlewares import DependencyMiddleware
 from .services import (
+    DeepgramModelPreferences,
     DeepgramTranscriber,
     GroqTranscriber,
     TelethonDownloadService,
@@ -35,6 +36,7 @@ async def run_bot() -> None:
 
     registry = _build_registry(settings)
     preferences = ProviderPreferences(default=registry.default_provider)
+    deepgram_models = DeepgramModelPreferences(settings.deepgram_default_model)
     telethon_downloader = TelethonDownloadService(
         api_id=settings.telegram_api_id,
         api_hash=settings.telegram_api_hash,
@@ -45,6 +47,7 @@ async def run_bot() -> None:
         transcriber_registry=registry,
         provider_preferences=preferences,
         telethon_downloader=telethon_downloader,
+        deepgram_model_preferences=deepgram_models,
     )
     dispatcher.message.middleware.register(dependency_middleware)
     dispatcher.callback_query.middleware.register(dependency_middleware)
@@ -57,7 +60,10 @@ def _build_registry(settings: Settings) -> TranscriberRegistry:
     if settings.groq_api_key:
         transcribers["groq"] = GroqTranscriber(settings.groq_api_key)
     if settings.deepgram_api_key:
-        transcribers["deepgram"] = DeepgramTranscriber(settings.deepgram_api_key)
+        transcribers["deepgram"] = DeepgramTranscriber(
+            settings.deepgram_api_key,
+            model=settings.deepgram_default_model,
+        )
 
     if not transcribers:
         raise RuntimeError("Tidak ada transcriber yang dikonfigurasi. Tambahkan GROQ_API_KEY atau DEEPGRAM_API_KEY.")

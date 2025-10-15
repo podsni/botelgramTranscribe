@@ -13,6 +13,7 @@ class Settings:
     groq_api_key: Optional[str]
     deepgram_api_key: Optional[str]
     transcription_provider: str
+    deepgram_default_model: str
 
 
 def load_settings() -> Settings:
@@ -25,6 +26,7 @@ def load_settings() -> Settings:
     groq_key = os.getenv("GROQ_API_KEY")
     deepgram_key = os.getenv("DEEPGRAM_API_KEY")
     provider = (os.getenv("TRANSCRIPTION_PROVIDER") or "groq").strip().lower()
+    deepgram_model = (os.getenv("DEEPGRAM_MODEL") or "whisper").strip().lower()
 
     if not telegram_token:
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN in environment or .env file.")
@@ -44,6 +46,11 @@ def load_settings() -> Settings:
     except ValueError as exc:
         raise RuntimeError("TELEGRAM_API_ID must be an integer.") from exc
 
+    if provider == "deepgram" and deepgram_model not in {"whisper", "nova-3"}:
+        raise RuntimeError("DEEPGRAM_MODEL must be 'whisper' or 'nova-3'.")
+    if deepgram_key and deepgram_model not in {"whisper", "nova-3"}:
+        raise RuntimeError("DEEPGRAM_MODEL must be 'whisper' or 'nova-3'.")
+
     return Settings(
         telegram_bot_token=telegram_token,
         telegram_api_id=api_id_int,
@@ -51,4 +58,5 @@ def load_settings() -> Settings:
         groq_api_key=groq_key,
         deepgram_api_key=deepgram_key,
         transcription_provider=provider,
+        deepgram_default_model=deepgram_model,
     )

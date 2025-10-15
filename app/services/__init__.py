@@ -3,7 +3,7 @@
 from .deepgram_service import DeepgramTranscriber
 from .groq_service import GroqTranscriber, TranscriptionResult
 from .telethon_service import TelethonDownloadService
-from .transcription import ProviderPreferences, TranscriberRegistry
+from .transcription import DeepgramModelPreferences, ProviderPreferences, TranscriberRegistry
 
 __all__ = [
     "GroqTranscriber",
@@ -12,4 +12,5 @@ __all__ = [
     "TelethonDownloadService",
     "TranscriberRegistry",
     "ProviderPreferences",
+    "DeepgramModelPreferences",
 ]

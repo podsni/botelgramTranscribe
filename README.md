@@ -13,6 +13,7 @@ Bot Telegram ini mentranskripsi audio, voice note, dan video menggunakan layanan
    - `TRANSCRIPTION_PROVIDER`: `groq` (default) atau `deepgram`.
    - `GROQ_API_KEY`: kunci Groq Whisper (wajib jika provider `groq`).
    - `DEEPGRAM_API_KEY`: kunci Deepgram (wajib jika provider `deepgram`).
+   - `DEEPGRAM_MODEL`: (opsional) model default Deepgram (`whisper` atau `nova-3`).
 2. Install dependensi Python (gunakan Python 3.9+).
    ```bash
    python -m venv .venv
@@ -45,6 +46,6 @@ Bot akan mulai menggunakan long polling. Kirim atau forward file audio (mp3, m4a
 - Berkat integrasi Telethon (MTProto), bot dapat mengunduh file hingga 2GB. Jika ukuran melebihi 2GB, Anda perlu mengompresi atau memotong file secara manual sebelum mengirim ulang.
 - Bot akan mengonversi media berukuran ≥15MB ke format mp3 menggunakan `ffmpeg` secara otomatis setelah unduhan selesai. Pastikan `ffmpeg` tersedia di lingkungan server.
 - Bot berbasis Aiogram 3 dan Telethon sehingga seluruh alur bersifat asinkron serta efisien untuk unduhan buffer-stream besar.
-- Per chat, gunakan perintah `/provider` untuk membuka pilihan interaktif penyedia Groq atau Deepgram.
+- Per chat, gunakan perintah `/provider` untuk membuka pilihan interaktif penyedia Groq atau Deepgram serta memilih model Deepgram (`whisper` atau `nova-3`).
 - Untuk media ≥50MB, terminal akan menampilkan progress bar unduhan lengkap dengan logging Rich agar status proses mudah dipantau.
 - Salinan media yang diunduh akan disimpan di `~/Downloads/transhades/` sehingga Anda dapat melakukan konversi atau kompresi lanjutan secara manual.

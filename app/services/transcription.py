@@ -45,3 +45,20 @@ class ProviderPreferences:
 
     def clear(self, chat_id: int) -> None:
         self._preferences.pop(chat_id, None)
+
+
+class DeepgramModelPreferences:
+    """Store per-chat Deepgram model selections."""
+
+    def __init__(self, default_model: str) -> None:
+        self.default_model = default_model
+        self._models: Dict[int, str] = {}
+
+    def set(self, chat_id: int, model: str) -> None:
+        self._models[chat_id] = model
+
+    def get(self, chat_id: int) -> str:
+        return self._models.get(chat_id, self.default_model)
+
+    def clear(self, chat_id: int) -> None:
+        self._models.pop(chat_id, None)
