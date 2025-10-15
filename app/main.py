@@ -13,6 +13,8 @@ from .services import (
     DeepgramTranscriber,
     GroqTranscriber,
     TelethonDownloadService,
+    TranscriberRegistry,
+    ProviderPreferences,
 )
 
 LOG_FORMAT = "%(message)s"
@@ -31,7 +33,8 @@ async def run_bot() -> None:
     dispatcher = Dispatcher()
     dispatcher.include_router(build_router())
 
-    transcriber = _build_transcriber(settings)
+    registry = _build_registry(settings)
+    preferences = ProviderPreferences(default=registry.default_provider)
     telethon_downloader = TelethonDownloadService(
         api_id=settings.telegram_api_id,
         api_hash=settings.telegram_api_hash,
@@ -39,20 +42,28 @@ async def run_bot() -> None:
     )
 
     dependency_middleware = DependencyMiddleware(
-        transcriber=transcriber,
+        transcriber_registry=registry,
+        provider_preferences=preferences,
         telethon_downloader=telethon_downloader,
     )
     dispatcher.message.middleware.register(dependency_middleware)
+    dispatcher.callback_query.middleware.register(dependency_middleware)
 
     await dispatcher.start_polling(bot)
 
 
-def _build_transcriber(settings: Settings):
-    if settings.transcription_provider == "deepgram":
-        assert settings.deepgram_api_key  # Guarded during settings load
-        return DeepgramTranscriber(settings.deepgram_api_key)
-    assert settings.groq_api_key  # Guarded during settings load
-    return GroqTranscriber(settings.groq_api_key)
+def _build_registry(settings: Settings) -> TranscriberRegistry:
+    transcribers: dict[str, object] = {}
+    if settings.groq_api_key:
+        transcribers["groq"] = GroqTranscriber(settings.groq_api_key)
+    if settings.deepgram_api_key:
+        transcribers["deepgram"] = DeepgramTranscriber(settings.deepgram_api_key)
+
+    if not transcribers:
+        raise RuntimeError("Tidak ada transcriber yang dikonfigurasi. Tambahkan GROQ_API_KEY atau DEEPGRAM_API_KEY.")
+
+    default = settings.transcription_provider if settings.transcription_provider in transcribers else next(iter(transcribers))
+    return TranscriberRegistry(default, transcribers)
 
 
 def main() -> None:

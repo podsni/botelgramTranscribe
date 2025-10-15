@@ -39,11 +39,12 @@ Bot akan mulai menggunakan long polling. Kirim atau forward file audio (mp3, m4a
 ## Catatan
 
 - Token Groq/Deepgram dan Telegram diambil dari variabel lingkungan (`GROQ_API_KEY` atau `DEEPGRAM_API_KEY`, serta `TELEGRAM_BOT_TOKEN`).
-- Bot akan mengunduh file media secara sementara ke direktori sistem dan memastikan pembersihan setelah selesai.
+- Bot akan mengunduh file media secara sementara ke direktori sistem dan membersihkannya otomatis setelah proses selesai.
 - Struktur modular berada di folder `app/` yang memisahkan konfigurasi, handler Telegram, dan integrasi Groq untuk memudahkan pemeliharaan.
 - Bot akan otomatis mengirim hasil sebagai pesan (maks 4000 karakter) serta lampiran `transcript.txt` dan, bila tersedia, `transcript.srt` tanpa timestamp tambahan di teks utama.
 - Berkat integrasi Telethon (MTProto), bot dapat mengunduh file hingga 2GB. Jika ukuran melebihi 2GB, Anda perlu mengompresi atau memotong file secara manual sebelum mengirim ulang.
 - Bot akan mengonversi media berukuran ≥15MB ke format mp3 menggunakan `ffmpeg` secara otomatis setelah unduhan selesai. Pastikan `ffmpeg` tersedia di lingkungan server.
 - Bot berbasis Aiogram 3 dan Telethon sehingga seluruh alur bersifat asinkron serta efisien untuk unduhan buffer-stream besar.
+- Per chat, gunakan perintah `/provider` untuk membuka pilihan interaktif penyedia Groq atau Deepgram.
 - Untuk media ≥50MB, terminal akan menampilkan progress bar unduhan lengkap dengan logging Rich agar status proses mudah dipantau.
 - Salinan media yang diunduh akan disimpan di `~/Downloads/transhades/` sehingga Anda dapat melakukan konversi atau kompresi lanjutan secara manual.

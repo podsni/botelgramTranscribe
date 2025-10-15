@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional
 
 from aiogram import Router
 from aiogram.types import Message, BufferedInputFile
@@ -24,7 +24,12 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from ..services import TelethonDownloadService, TranscriptionResult
+from ..services import (
+    ProviderPreferences,
+    TranscriberRegistry,
+    TelethonDownloadService,
+    TranscriptionResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +53,8 @@ class MediaMeta:
 async def handle_media(
     message: Message,
     telethon_downloader: TelethonDownloadService,
-    transcriber: Any,
+    transcriber_registry: TranscriberRegistry,
+    provider_preferences: ProviderPreferences,
 ) -> None:
     meta = _pick_media(message)
     if not meta:
@@ -62,8 +68,22 @@ async def handle_media(
         return
 
     download_path = _build_download_path(meta)
+    cleanup_paths = {download_path}
+    prepared_path: Path = download_path
 
-    provider_name = getattr(transcriber, "provider_name", "transcriber")
+    requested_provider = provider_preferences.get(message.chat.id)
+    transcriber = transcriber_registry.get(requested_provider)
+    if not transcriber:
+        fallback = transcriber_registry.default_provider
+        transcriber = transcriber_registry.get(fallback)
+        provider_preferences.set(message.chat.id, fallback)
+        requested_provider = fallback
+
+    if not transcriber:
+        await message.answer("Tidak ada provider transkripsi yang tersedia saat ini.")
+        return
+
+    provider_name = getattr(transcriber, "provider_name", requested_provider)
     payload_limit = getattr(transcriber, "max_payload_bytes", DEFAULT_PAYLOAD_LIMIT)
 
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
@@ -86,6 +106,7 @@ async def handle_media(
                 download_path,
                 meta.file_size,
             )
+            cleanup_paths.add(prepared_path)
 
             try:
                 payload_size = prepared_path.stat().st_size
@@ -126,6 +147,13 @@ async def handle_media(
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unhandled error while processing media")
             await message.answer(f"Gagal memproses file: {exc}")
+        finally:
+            for path in cleanup_paths:
+                try:
+                    if path.exists():
+                        path.unlink()
+                except OSError:
+                    logger.warning("Gagal menghapus file sementara %s", path, exc_info=True)
 
 
 def _pick_media(message: Message) -> Optional[MediaMeta]:
@@ -233,38 +261,57 @@ def _prepare_audio_for_transcription(source_path: Path, file_size: Optional[int]
 
     actual_size = file_size or source_path.stat().st_size
     suffix = source_path.suffix.lower()
-    should_convert = actual_size >= AUDIO_CONVERSION_THRESHOLD or suffix != ".mp3"
 
-    if not should_convert:
-        logger.info("Skipping conversion for %s (size %s bytes below threshold).", source_path, actual_size)
+    if suffix == ".mp3" and actual_size < AUDIO_CONVERSION_THRESHOLD:
+        logger.info(
+            "Skipping compression for %s (size %s bytes below threshold).",
+            source_path,
+            actual_size,
+        )
         return source_path
+
+    target_path: Path
+    command: list[str]
 
     if suffix == ".mp3":
         target_path = source_path.with_name(f"{source_path.stem}_compressed.mp3")
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source_path),
+            "-codec:a",
+            "libmp3lame",
+            "-b:a",
+            "112k",
+            str(target_path),
+        ]
     else:
         target_path = source_path.with_suffix(".mp3")
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source_path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-codec:a",
+            "libmp3lame",
+            "-b:a",
+            "96k",
+            str(target_path),
+        ]
 
     logger.info(
-        "Converting %s (%s bytes) to mp3 at %s",
+        "Converting %s (%s bytes) to %s at %s",
         source_path,
         actual_size,
+        target_path.suffix,
         target_path,
     )
-
-    command = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(source_path),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-b:a",
-        "96k",
-        str(target_path),
-    ]
 
     try:
         result = subprocess.run(
