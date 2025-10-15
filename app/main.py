@@ -19,6 +19,7 @@ from .services import (
 )
 from .services.audio_optimizer import AudioOptimizer, TranscriptCache
 from .services.queue_service import TaskQueue
+from .services.api_rotator import TelegramAPIRotator
 
 LOG_FORMAT = "%(message)s"
 
@@ -30,6 +31,8 @@ async def run_bot() -> None:
         datefmt="%H:%M:%S",
         handlers=[RichHandler(rich_tracebacks=True, markup=True)],
     )
+
+    logger = logging.getLogger(__name__)
     settings = load_settings()
 
     bot = Bot(settings.telegram_bot_token)
@@ -39,14 +42,23 @@ async def run_bot() -> None:
     registry = _build_registry(settings)
     preferences = ProviderPreferences(default=registry.default_provider)
     deepgram_models = DeepgramModelPreferences(settings.deepgram_default_model)
-    telethon_downloader = TelethonDownloadService(
-        api_id=settings.telegram_api_id,
-        api_hash=settings.telegram_api_hash,
+
+    # Initialize API rotator with multiple credentials
+    api_rotator = TelegramAPIRotator(
+        credentials_list=settings.telegram_api_credentials,
         bot_token=settings.telegram_bot_token,
+    )
+    logger.info(
+        "Initialized with %d Telegram API(s): %s",
+        api_rotator.get_total_count(),
+        ", ".join(api.credentials.name for api in api_rotator.apis.values()),
+    )
+
+    telethon_downloader = TelethonDownloadService(
+        api_rotator=api_rotator,
     )
 
     # Initialize optimization components
-    logger = logging.getLogger(__name__)
 
     # Audio Optimizer
     audio_optimizer = AudioOptimizer(

@@ -1,15 +1,23 @@
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
 
 @dataclass(frozen=True)
+class TelegramAPICredentials:
+    """Single Telegram API credentials."""
+
+    api_id: int
+    api_hash: str
+    name: str = "default"
+
+
+@dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
-    telegram_api_id: int
-    telegram_api_hash: str
+    telegram_api_credentials: List[TelegramAPICredentials]
     groq_api_key: Optional[str]
     deepgram_api_key: Optional[str]
     transcription_provider: str
@@ -45,8 +53,6 @@ def load_settings() -> Settings:
     load_dotenv()
 
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    api_id = os.getenv("TELEGRAM_API_ID")
-    api_hash = os.getenv("TELEGRAM_API_HASH")
     groq_key = os.getenv("GROQ_API_KEY")
     deepgram_key = os.getenv("DEEPGRAM_API_KEY")
     provider = (os.getenv("TRANSCRIPTION_PROVIDER") or "groq").strip().lower()
@@ -57,10 +63,15 @@ def load_settings() -> Settings:
 
     if not telegram_token:
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN in environment or .env file.")
-    if not api_id:
-        raise RuntimeError("Missing TELEGRAM_API_ID in environment or .env file.")
-    if not api_hash:
-        raise RuntimeError("Missing TELEGRAM_API_HASH in environment or .env file.")
+
+    # Load multiple API credentials for rotation
+    api_credentials = _load_telegram_api_credentials()
+    if not api_credentials:
+        raise RuntimeError(
+            "Missing Telegram API credentials. "
+            "Set TELEGRAM_API_ID and TELEGRAM_API_HASH, "
+            "or use TELEGRAM_API_ID_1, TELEGRAM_API_HASH_1, etc."
+        )
     if provider not in {"groq", "deepgram"}:
         raise RuntimeError(
             "TRANSCRIPTION_PROVIDER must be either 'groq' or 'deepgram'."
@@ -71,11 +82,6 @@ def load_settings() -> Settings:
         raise RuntimeError(
             "Missing DEEPGRAM_API_KEY for Deepgram transcription provider."
         )
-
-    try:
-        api_id_int = int(api_id)
-    except ValueError as exc:
-        raise RuntimeError("TELEGRAM_API_ID must be an integer.") from exc
 
     if provider == "deepgram" and deepgram_model not in {"whisper", "nova-3"}:
         raise RuntimeError("DEEPGRAM_MODEL must be 'whisper' or 'nova-3'.")
@@ -119,8 +125,7 @@ def load_settings() -> Settings:
 
     return Settings(
         telegram_bot_token=telegram_token,
-        telegram_api_id=api_id_int,
-        telegram_api_hash=api_hash,
+        telegram_api_credentials=api_credentials,
         groq_api_key=groq_key,
         deepgram_api_key=deepgram_key,
         transcription_provider=provider,
@@ -145,3 +150,58 @@ def load_settings() -> Settings:
         webhook_port=webhook_port,
         webhook_secret=webhook_secret,
     )
+
+
+def _load_telegram_api_credentials() -> List[TelegramAPICredentials]:
+    """
+    Load multiple Telegram API credentials for rotation.
+
+    Supports two formats:
+    1. Single API: TELEGRAM_API_ID, TELEGRAM_API_HASH
+    2. Multiple APIs: TELEGRAM_API_ID_1, TELEGRAM_API_HASH_1, etc.
+    """
+    credentials = []
+
+    # Try numbered credentials first (API_1, API_2, ...)
+    index = 1
+    while True:
+        api_id_key = f"TELEGRAM_API_ID_{index}" if index > 1 else "TELEGRAM_API_ID"
+        api_hash_key = (
+            f"TELEGRAM_API_HASH_{index}" if index > 1 else "TELEGRAM_API_HASH"
+        )
+
+        api_id = os.getenv(api_id_key)
+        api_hash = os.getenv(api_hash_key)
+
+        if not api_id or not api_hash:
+            # No more credentials
+            if index == 1:
+                # Try alternative naming (TELEGRAM_API_ID_1)
+                api_id = os.getenv("TELEGRAM_API_ID_1")
+                api_hash = os.getenv("TELEGRAM_API_HASH_1")
+                if not api_id or not api_hash:
+                    break
+            else:
+                break
+
+        try:
+            api_id_int = int(api_id)
+        except ValueError:
+            raise RuntimeError(f"{api_id_key} must be an integer, got: {api_id}")
+
+        name = f"API-{index}"
+        credentials.append(
+            TelegramAPICredentials(
+                api_id=api_id_int,
+                api_hash=api_hash,
+                name=name,
+            )
+        )
+
+        index += 1
+
+        # Safety: max 10 APIs
+        if index > 10:
+            break
+
+    return credentials

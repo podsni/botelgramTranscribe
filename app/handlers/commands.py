@@ -53,9 +53,36 @@ async def status_command(
     message: Message,
     transcript_cache: TranscriptCache = None,
     task_queue: TaskQueue = None,
+    telethon_downloader=None,
 ) -> None:
-    """Show bot status, cache stats, and queue info."""
+    """Show bot status, cache stats, queue info, and API rotation stats."""
     status_lines = ["🤖 **Bot Status**\n"]
+
+    # API Rotation stats
+    if telethon_downloader:
+        try:
+            api_stats = await telethon_downloader.get_stats()
+            available_apis = sum(1 for api in api_stats.values() if api["available"])
+            total_apis = len(api_stats)
+
+            status_lines.append("🔄 **API Rotation:**")
+            status_lines.append(f"• Available APIs: {available_apis}/{total_apis}")
+
+            for api_name, api_data in api_stats.items():
+                status_emoji = "✅" if api_data["available"] else "⏳"
+                status_text = "Ready" if api_data["available"] else "FloodWait"
+
+                if api_data["in_flood_wait"] and api_data["flood_wait_until"]:
+                    status_text = f"FloodWait until {api_data['flood_wait_until']}"
+
+                status_lines.append(
+                    f"  {status_emoji} {api_name}: {status_text} "
+                    f"({api_data['success_rate']} success, "
+                    f"{api_data['total_requests']} requests)"
+                )
+            status_lines.append("")
+        except Exception as e:
+            status_lines.append(f"⚠️ API stats unavailable: {e}\n")
 
     # Queue stats
     if task_queue:
