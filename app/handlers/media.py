@@ -31,6 +31,8 @@ from ..services import (
     TelethonDownloadService,
     TranscriptionResult,
 )
+from ..services.audio_optimizer import AudioOptimizer, TranscriptCache
+from ..services.queue_service import TaskQueue, TranscriptionTask
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,6 @@ router = Router()
 
 TELEGRAM_FILE_DOWNLOAD_LIMIT = 2 * 1024 * 1024 * 1024  # 2 GB via MTProto.
 TELEGRAM_MESSAGE_LIMIT = 4000
-AUDIO_CONVERSION_THRESHOLD = 15 * 1024 * 1024  # Convert to mp3 when file size >= 15MB.
 PROGRESS_BAR_THRESHOLD = 50 * 1024 * 1024  # Show progress bar for downloads >= 50MB.
 DEFAULT_PAYLOAD_LIMIT = 25 * 1024 * 1024  # Fallback payload limit (~25MB).
 
@@ -57,6 +58,10 @@ async def handle_media(
     transcriber_registry: TranscriberRegistry,
     provider_preferences: ProviderPreferences,
     deepgram_model_preferences: DeepgramModelPreferences,
+    audio_optimizer: AudioOptimizer,
+    transcript_cache: Optional[TranscriptCache],
+    task_queue: TaskQueue,
+    compression_threshold_mb: int = 30,
 ) -> None:
     meta = _pick_media(message)
     if not meta:
@@ -96,8 +101,67 @@ async def handle_media(
 
     payload_limit = getattr(transcriber, "max_payload_bytes", DEFAULT_PAYLOAD_LIMIT)
 
+    # Submit to queue for async processing
+    try:
+        task_id = await task_queue.submit(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            file_path=download_path,
+            provider=requested_provider,
+            priority=0,
+            processor=lambda task: _process_transcription_task(
+                task=task,
+                message=message,
+                telethon_downloader=telethon_downloader,
+                transcriber_registry=transcriber_registry,
+                provider_preferences=provider_preferences,
+                deepgram_model_preferences=deepgram_model_preferences,
+                audio_optimizer=audio_optimizer,
+                transcript_cache=transcript_cache,
+                compression_threshold_mb=compression_threshold_mb,
+                meta=meta,
+            ),
+        )
+
+        queue_stats = await task_queue.get_stats()
+        await message.answer(
+            f"🎵 Audio Anda dalam antrian pemrosesan!\n\n"
+            f"📋 Task ID: `{task_id[:8]}`\n"
+            f"⏳ Posisi antrian: {queue_stats['queue_size']}\n"
+            f"👷 Worker aktif: {queue_stats['active_workers']}/{task_queue.max_workers}\n\n"
+            f"Hasil akan dikirim otomatis saat selesai."
+        )
+        logger.info(
+            "Task %s submitted to queue for chat %s", task_id[:8], message.chat.id
+        )
+
+    except RuntimeError as rate_err:
+        logger.warning("Rate limit exceeded for user %s: %s", message.chat.id, rate_err)
+        await message.answer(
+            "⚠️ Anda memiliki terlalu banyak task yang sedang diproses.\n"
+            "Silakan tunggu task sebelumnya selesai terlebih dahulu."
+        )
+
+
+async def _process_transcription_task(
+    task: TranscriptionTask,
+    message: Message,
+    telethon_downloader: TelethonDownloadService,
+    transcriber_registry: TranscriberRegistry,
+    provider_preferences: ProviderPreferences,
+    deepgram_model_preferences: DeepgramModelPreferences,
+    audio_optimizer: AudioOptimizer,
+    transcript_cache: Optional[TranscriptCache],
+    compression_threshold_mb: int,
+    meta: MediaMeta,
+) -> None:
+    """Process transcription task with caching and optimization."""
+    download_path = task.file_path
+    cleanup_paths = {download_path}
+
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
         try:
+            # Download media
             logger.info(
                 "Starting download for %s (%s bytes) in chat %s",
                 meta.display_name,
@@ -111,10 +175,30 @@ async def handle_media(
                 download_path.stat().st_size if download_path.exists() else "unknown",
             )
 
+            # Check cache first
+            file_hash = None
+            if transcript_cache:
+                file_hash = await audio_optimizer._compute_file_hash(download_path)
+                cached_result = await transcript_cache.get(file_hash)
+                if cached_result:
+                    logger.info("✨ Cache hit for file hash %s", file_hash[:8])
+                    text, segments = cached_result
+                    result = TranscriptionResult(text=text, segments=segments)
+                    await message.answer(
+                        f"✨ Hasil dari cache (file sudah pernah diproses)!\n\n"
+                        f"Provider: {task.provider}"
+                    )
+                    await _deliver_transcription(message, result)
+                    return
+
+            # Optimize audio
+            compression_threshold_bytes = compression_threshold_mb * 1024 * 1024
             prepared_path = await asyncio.to_thread(
-                _prepare_audio_for_transcription,
+                _prepare_audio_for_transcription_optimized,
                 download_path,
                 meta.file_size,
+                audio_optimizer,
+                compression_threshold_bytes,
             )
             cleanup_paths.add(prepared_path)
 
@@ -122,6 +206,27 @@ async def handle_media(
                 payload_size = prepared_path.stat().st_size
             except OSError:
                 payload_size = None
+
+            # Get transcriber again for this task
+            requested_provider = task.provider
+            transcriber = transcriber_registry.get(requested_provider)
+            if not transcriber:
+                fallback = transcriber_registry.default_provider
+                transcriber = transcriber_registry.get(fallback)
+                requested_provider = fallback
+
+            provider_key = getattr(transcriber, "provider_name", requested_provider)
+            provider_display = provider_key
+
+            if provider_key == "deepgram":
+                model = deepgram_model_preferences.get(message.chat.id)
+                if hasattr(transcriber, "with_model"):
+                    transcriber = transcriber.with_model(model)
+                provider_display = f"deepgram ({model})"
+
+            payload_limit = getattr(
+                transcriber, "max_payload_bytes", DEFAULT_PAYLOAD_LIMIT
+            )
 
             if payload_limit and payload_size and payload_size > payload_limit:
                 logger.warning(
@@ -138,8 +243,16 @@ async def handle_media(
                 )
                 return
 
-            logger.info("Starting transcription via %s for %s", provider_display, prepared_path)
+            logger.info(
+                "Starting transcription via %s for %s", provider_display, prepared_path
+            )
             result = await asyncio.to_thread(transcriber.transcribe, prepared_path)
+
+            # Save to cache
+            if transcript_cache and file_hash:
+                await transcript_cache.set(file_hash, result.text, result.segments)
+                logger.info("💾 Cached transcript for hash %s", file_hash[:8])
+
             await _deliver_transcription(message, result)
         except ValueError as val_err:
             logger.exception("%s gagal menghasilkan transkrip", provider_display)
@@ -148,8 +261,12 @@ async def handle_media(
                 "Silakan periksa kualitas audio atau coba model/provider lain."
             )
         except HTTPError as http_err:
-            logger.exception("%s API error during transcription", provider_display.capitalize())
-            status_code = http_err.response.status_code if http_err.response is not None else None
+            logger.exception(
+                "%s API error during transcription", provider_display.capitalize()
+            )
+            status_code = (
+                http_err.response.status_code if http_err.response is not None else None
+            )
             if status_code == 413:
                 await message.answer(
                     f"{provider_display.capitalize()} menolak file karena terlalu besar (HTTP 413). "
@@ -169,7 +286,9 @@ async def handle_media(
                     if path.exists():
                         path.unlink()
                 except OSError:
-                    logger.warning("Gagal menghapus file sementara %s", path, exc_info=True)
+                    logger.warning(
+                        "Gagal menghapus file sementara %s", path, exc_info=True
+                    )
 
 
 def _pick_media(message: Message) -> Optional[MediaMeta]:
@@ -238,7 +357,9 @@ async def _download_media(
 
     def progress_callback(current: int, total: int) -> None:
         if progress and task_id is not None:
-            progress.update(task_id, completed=current, total=total or meta.file_size or 0)
+            progress.update(
+                task_id, completed=current, total=total or meta.file_size or 0
+            )
 
     if (meta.file_size or 0) >= PROGRESS_BAR_THRESHOLD:
         progress = Progress(
@@ -270,7 +391,10 @@ async def _download_media(
             progress.stop()
 
 
-def _prepare_audio_for_transcription(source_path: Path, file_size: Optional[int]) -> Path:
+def _prepare_audio_for_transcription(
+    source_path: Path, file_size: Optional[int]
+) -> Path:
+    """Legacy function - kept for compatibility."""
     if not source_path.exists():
         logger.warning("Source path %s tidak ditemukan.", source_path)
         return source_path
@@ -279,14 +403,6 @@ def _prepare_audio_for_transcription(source_path: Path, file_size: Optional[int]
     suffix = source_path.suffix.lower()
 
     if suffix == ".mp3":
-        if actual_size < AUDIO_CONVERSION_THRESHOLD:
-            logger.info(
-                "Skipping compression for %s (size %s bytes below threshold).",
-                source_path,
-                actual_size,
-            )
-            return source_path
-
         logger.info(
             "Skipping re-encoding for %s (already mp3).",
             source_path,
@@ -333,12 +449,113 @@ def _prepare_audio_for_transcription(source_path: Path, file_size: Optional[int]
             stderr=subprocess.PIPE,
         )
         if result.stderr:
-            logger.debug("ffmpeg stderr: %s", result.stderr.decode("utf-8", errors="ignore"))
+            logger.debug(
+                "ffmpeg stderr: %s", result.stderr.decode("utf-8", errors="ignore")
+            )
         try:
             new_size = target_path.stat().st_size
         except OSError:
             new_size = "unknown"
         logger.info("Conversion complete for %s (%s bytes).", target_path, new_size)
+        return target_path
+    except subprocess.CalledProcessError as err:
+        logger.error(
+            "ffmpeg conversion failed for %s: %s",
+            source_path,
+            err.stderr.decode("utf-8", errors="ignore"),
+        )
+        return source_path
+
+
+def _prepare_audio_for_transcription_optimized(
+    source_path: Path,
+    file_size: Optional[int],
+    audio_optimizer: AudioOptimizer,
+    compression_threshold_bytes: int,
+) -> Path:
+    """Optimized audio preparation with intelligent compression."""
+    if not source_path.exists():
+        logger.warning("Source path %s tidak ditemukan.", source_path)
+        return source_path
+
+    actual_size = file_size or source_path.stat().st_size
+    suffix = source_path.suffix.lower()
+
+    # Check if compression is needed
+    if actual_size < compression_threshold_bytes:
+        if suffix == ".mp3":
+            logger.info(
+                "✓ File %s already optimal (mp3, %s bytes < %s threshold)",
+                source_path.name,
+                actual_size,
+                compression_threshold_bytes,
+            )
+            return source_path
+        elif suffix in [".ogg", ".m4a"]:
+            logger.info(
+                "✓ File %s is small enough (%s bytes < %s threshold), minimal conversion",
+                source_path.name,
+                actual_size,
+                compression_threshold_bytes,
+            )
+
+    # Need compression - use ffmpeg
+    target_path = source_path.with_suffix(".mp3")
+
+    # Determine optimal bitrate based on file size
+    if actual_size > 100 * 1024 * 1024:  # >100MB
+        bitrate = "64k"
+        logger.info("Large file detected, using lower bitrate: %s", bitrate)
+    elif actual_size > 50 * 1024 * 1024:  # >50MB
+        bitrate = "80k"
+    else:
+        bitrate = audio_optimizer.target_bitrate
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-vn",
+        "-ac",
+        str(audio_optimizer.target_channels),
+        "-ar",
+        str(audio_optimizer.target_sample_rate),
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        bitrate,
+        str(target_path),
+    ]
+
+    logger.info(
+        "🎵 Optimizing audio: %s (%s bytes) → %s (bitrate: %s)",
+        source_path.name,
+        actual_size,
+        target_path.name,
+        bitrate,
+    )
+
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.stderr:
+            logger.debug(
+                "ffmpeg stderr: %s", result.stderr.decode("utf-8", errors="ignore")
+            )
+
+        new_size = target_path.stat().st_size
+        compression_ratio = (1 - new_size / actual_size) * 100
+        logger.info(
+            "✓ Optimization complete: %s → %s bytes (%.1f%% compression)",
+            target_path.name,
+            new_size,
+            compression_ratio,
+        )
         return target_path
     except subprocess.CalledProcessError as err:
         logger.error(
@@ -387,7 +604,9 @@ async def _send_transcript_files(
         try:
             srt_content = result.to_srt()
         except ValueError:
-            logger.info("SRT output tidak tersedia karena segment informasi tidak lengkap.")
+            logger.info(
+                "SRT output tidak tersedia karena segment informasi tidak lengkap."
+            )
             return
 
         if srt_content:
