@@ -1,6 +1,6 @@
 # Transhades Telegram Transcription Bot ⚡
 
-Bot Telegram ini mentranskripsi audio, voice note, dan video menggunakan layanan Groq Whisper atau Deepgram (pilih sesuai kebutuhan). Anda dapat mengirim langsung atau me-forward file ke bot dan menerima teks hasil transkripsi.
+Bot Telegram ini mentranskripsi audio, voice note, dan video menggunakan layanan Groq Whisper, Deepgram, atau Together AI (pilih sesuai kebutuhan). Anda dapat mengirim langsung atau me-forward file ke bot dan menerima teks hasil transkripsi.
 
 ## 🚀 **NEW! Performance Optimized v2.0**
 
@@ -26,9 +26,10 @@ Bot sekarang **3-5x lebih cepat** dengan fitur-fitur canggih:
    ```
    - `TELEGRAM_BOT_TOKEN`: token bot dari BotFather.
    - `TELEGRAM_API_ID` dan `TELEGRAM_API_HASH`: kredensial MTProto dari [my.telegram.org](https://my.telegram.org).
-   - `TRANSCRIPTION_PROVIDER`: `groq` (default) atau `deepgram`.
+   - `TRANSCRIPTION_PROVIDER`: `groq` (default), `deepgram`, atau `together`.
    - `GROQ_API_KEY`: kunci Groq Whisper (wajib jika provider `groq`).
    - `DEEPGRAM_API_KEY`: kunci Deepgram (wajib jika provider `deepgram`).
+   - `TOGETHER_API_KEY`: kunci Together AI (wajib jika provider `together`).
    - `DEEPGRAM_MODEL`: (opsional) model default Deepgram (`whisper` atau `nova-3`).
    - `DEEPGRAM_DETECT_LANGUAGE`: (opsional) aktifkan deteksi otomatis bahasa (`true`/`false`, default `true`).
 2. Install dependensi Python (gunakan Python 3.9+).
@@ -80,10 +81,11 @@ Bot sekarang bisa handle multiple users secara bersamaan! Kirim atau forward fil
 ## 💡 Fitur Utama
 
 ### Core Features
-- ✅ Transkripsi audio & video (Groq Whisper / Deepgram)
+- ✅ Transkripsi audio & video (Groq Whisper / Deepgram / Together AI)
 - ✅ Support hingga 2GB file (via Telethon MTProto)
 - ✅ Auto-generate transcript.txt & transcript.srt
-- ✅ Multi-provider support dengan `/provider` command
+- ✅ Multi-provider support (3 providers!) dengan `/provider` command
+- ✅ Multi-API rotation (3 Telegram APIs untuk anti-FloodWait)
 - ✅ Progress bar untuk files ≥50MB
 
 ### 🚀 Performance Features (NEW!)
@@ -123,6 +125,20 @@ Bot sekarang bisa handle multiple users secara bersamaan! Kirim atau forward fil
 File `.env` sekarang support optimization settings:
 
 ```bash
+# Multi-API Rotation (anti-FloodWait)
+TELEGRAM_API_ID=12345678
+TELEGRAM_API_HASH=first_hash
+TELEGRAM_API_ID_2=24022506
+TELEGRAM_API_HASH_2=second_hash
+TELEGRAM_API_ID_3=24541863
+TELEGRAM_API_HASH_3=third_hash
+
+# Multiple Providers
+TRANSCRIPTION_PROVIDER=groq  # or deepgram or together
+GROQ_API_KEY=your_groq_key
+DEEPGRAM_API_KEY=your_deepgram_key
+TOGETHER_API_KEY=your_together_key
+
 # Caching (hemat 35-40% API costs)
 CACHE_ENABLED=true
 CACHE_TYPE=memory
@@ -145,16 +161,26 @@ Lihat [.env.example](.env.example) untuk konfigurasi lengkap.
 
 ### For Production (High Traffic)
 ```bash
+# Multiple Telegram APIs (3-5 APIs)
+TELEGRAM_API_ID_3=...
+TELEGRAM_API_ID_4=...
+TELEGRAM_API_ID_5=...
+
 # Use Redis cache
 CACHE_TYPE=redis
 REDIS_URL=redis://localhost:6379
 
 # More workers
-QUEUE_MAX_WORKERS=10
+QUEUE_MAX_WORKERS=15-20
 
 # Webhook mode (2-3x faster than polling)
 WEBHOOK_URL=https://yourdomain.com
 WEBHOOK_SECRET=your-secret-token
+
+# Multiple providers untuk failover
+GROQ_API_KEY=...
+DEEPGRAM_API_KEY=...
+TOGETHER_API_KEY=...
 ```
 
 ### For Limited Resources

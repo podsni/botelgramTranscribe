@@ -13,6 +13,7 @@ from .services import (
     DeepgramModelPreferences,
     DeepgramTranscriber,
     GroqTranscriber,
+    TogetherTranscriber,
     TelethonDownloadService,
     TranscriberRegistry,
     ProviderPreferences,
@@ -150,10 +151,12 @@ def _build_registry(settings: Settings) -> TranscriberRegistry:
             model=settings.deepgram_default_model,
             detect_language=settings.deepgram_detect_language,
         )
+    if settings.together_api_key:
+        transcribers["together"] = TogetherTranscriber(settings.together_api_key)
 
     if not transcribers:
         raise RuntimeError(
-            "Tidak ada transcriber yang dikonfigurasi. Tambahkan GROQ_API_KEY atau DEEPGRAM_API_KEY."
+            "Tidak ada transcriber yang dikonfigurasi. Tambahkan GROQ_API_KEY, DEEPGRAM_API_KEY, atau TOGETHER_API_KEY."
         )
 
     default = (

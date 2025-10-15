@@ -20,6 +20,7 @@ class Settings:
     telegram_api_credentials: List[TelegramAPICredentials]
     groq_api_key: Optional[str]
     deepgram_api_key: Optional[str]
+    together_api_key: Optional[str]
     transcription_provider: str
     deepgram_default_model: str
     deepgram_detect_language: bool
@@ -55,6 +56,7 @@ def load_settings() -> Settings:
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
     groq_key = os.getenv("GROQ_API_KEY")
     deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+    together_key = os.getenv("TOGETHER_API_KEY")
     provider = (os.getenv("TRANSCRIPTION_PROVIDER") or "groq").strip().lower()
     deepgram_model = (os.getenv("DEEPGRAM_MODEL") or "whisper").strip().lower()
     deepgram_detect_language_raw = (
@@ -72,15 +74,19 @@ def load_settings() -> Settings:
             "Set TELEGRAM_API_ID and TELEGRAM_API_HASH, "
             "or use TELEGRAM_API_ID_1, TELEGRAM_API_HASH_1, etc."
         )
-    if provider not in {"groq", "deepgram"}:
+    if provider not in {"groq", "deepgram", "together"}:
         raise RuntimeError(
-            "TRANSCRIPTION_PROVIDER must be either 'groq' or 'deepgram'."
+            "TRANSCRIPTION_PROVIDER must be 'groq', 'deepgram', or 'together'."
         )
     if provider == "groq" and not groq_key:
         raise RuntimeError("Missing GROQ_API_KEY for Groq transcription provider.")
     if provider == "deepgram" and not deepgram_key:
         raise RuntimeError(
             "Missing DEEPGRAM_API_KEY for Deepgram transcription provider."
+        )
+    if provider == "together" and not together_key:
+        raise RuntimeError(
+            "Missing TOGETHER_API_KEY for Together AI transcription provider."
         )
 
     if provider == "deepgram" and deepgram_model not in {"whisper", "nova-3"}:
@@ -128,6 +134,7 @@ def load_settings() -> Settings:
         telegram_api_credentials=api_credentials,
         groq_api_key=groq_key,
         deepgram_api_key=deepgram_key,
+        together_api_key=together_key,
         transcription_provider=provider,
         deepgram_default_model=deepgram_model,
         deepgram_detect_language=detect_language,
