@@ -27,12 +27,14 @@ class DeepgramTranscriber:
         model: str = "whisper",
         language: str = "en",
         smart_format: bool = True,
+        detect_language: bool = True,
         timeout: int = 300,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.language = language
         self.smart_format = smart_format
+        self.detect_language = detect_language
         self.timeout = timeout
 
     def transcribe(self, file_path: Path) -> TranscriptionResult:
@@ -42,6 +44,12 @@ class DeepgramTranscriber:
             "language": self.language,
             "smart_format": "true" if self.smart_format else "false",
         }
+
+        if self.detect_language:
+            params.pop("language", None)
+            params["detect_language"] = "true"
+        elif self.language:
+            params["language"] = self.language
 
         with file_path.open("rb") as audio_fp:
             response = requests.post(
@@ -69,6 +77,7 @@ class DeepgramTranscriber:
             model=selected,
             language=self.language,
             smart_format=self.smart_format,
+            detect_language=self.detect_language,
             timeout=self.timeout,
         )
 

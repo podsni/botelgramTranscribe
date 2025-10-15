@@ -14,6 +14,7 @@ class Settings:
     deepgram_api_key: Optional[str]
     transcription_provider: str
     deepgram_default_model: str
+    deepgram_detect_language: bool
 
 
 def load_settings() -> Settings:
@@ -27,6 +28,7 @@ def load_settings() -> Settings:
     deepgram_key = os.getenv("DEEPGRAM_API_KEY")
     provider = (os.getenv("TRANSCRIPTION_PROVIDER") or "groq").strip().lower()
     deepgram_model = (os.getenv("DEEPGRAM_MODEL") or "whisper").strip().lower()
+    deepgram_detect_language_raw = (os.getenv("DEEPGRAM_DETECT_LANGUAGE") or "true").strip().lower()
 
     if not telegram_token:
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN in environment or .env file.")
@@ -51,6 +53,8 @@ def load_settings() -> Settings:
     if deepgram_key and deepgram_model not in {"whisper", "nova-3"}:
         raise RuntimeError("DEEPGRAM_MODEL must be 'whisper' or 'nova-3'.")
 
+    detect_language = deepgram_detect_language_raw in {"1", "true", "yes", "on"}
+
     return Settings(
         telegram_bot_token=telegram_token,
         telegram_api_id=api_id_int,
@@ -59,4 +63,5 @@ def load_settings() -> Settings:
         deepgram_api_key=deepgram_key,
         transcription_provider=provider,
         deepgram_default_model=deepgram_model,
+        deepgram_detect_language=detect_language,
     )

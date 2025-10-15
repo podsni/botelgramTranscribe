@@ -63,6 +63,7 @@ def _build_registry(settings: Settings) -> TranscriberRegistry:
         transcribers["deepgram"] = DeepgramTranscriber(
             settings.deepgram_api_key,
             model=settings.deepgram_default_model,
+            detect_language=settings.deepgram_detect_language,
         )
 
     if not transcribers:

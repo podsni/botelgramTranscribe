@@ -141,6 +141,12 @@ async def handle_media(
             logger.info("Starting transcription via %s for %s", provider_display, prepared_path)
             result = await asyncio.to_thread(transcriber.transcribe, prepared_path)
             await _deliver_transcription(message, result)
+        except ValueError as val_err:
+            logger.exception("%s gagal menghasilkan transkrip", provider_display)
+            await message.answer(
+                f"{provider_display.capitalize()} tidak mengembalikan teks: {val_err}. "
+                "Silakan periksa kualitas audio atau coba model/provider lain."
+            )
         except HTTPError as http_err:
             logger.exception("%s API error during transcription", provider_display.capitalize())
             status_code = http_err.response.status_code if http_err.response is not None else None
@@ -365,10 +371,12 @@ async def _send_transcript_files(
     result: TranscriptionResult,
     plain_text: str,
 ) -> None:
+    base_name = _derive_base_name(message)
+
     txt_buffer = io.BytesIO(plain_text.encode("utf-8"))
     txt_file = BufferedInputFile(
         txt_buffer.getvalue(),
-        filename="transcript.txt",
+        filename=f"{base_name}.txt",
     )
     await message.answer_document(
         document=txt_file,
@@ -386,9 +394,25 @@ async def _send_transcript_files(
             srt_buffer = io.BytesIO(srt_content.encode("utf-8"))
             srt_file = BufferedInputFile(
                 srt_buffer.getvalue(),
-                filename="transcript.srt",
+                filename=f"{base_name}.srt",
             )
             await message.answer_document(
                 document=srt_file,
                 caption="Transkrip format SRT.",
             )
+
+
+def _derive_base_name(message: Message) -> str:
+    candidate = "transcript"
+    if message.document and message.document.file_name:
+        candidate = message.document.file_name
+    elif message.audio and message.audio.file_name:
+        candidate = message.audio.file_name
+    elif message.video and message.video.file_name:
+        candidate = message.video.file_name
+    elif message.caption:
+        candidate = message.caption
+
+    sanitized = _sanitize_filename(Path(candidate).stem)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    return f"{sanitized}_{timestamp}"
