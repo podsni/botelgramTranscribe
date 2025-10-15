@@ -1,0 +1,13 @@
+Tolong bautakn saya bottelgram transcript dengan whisper api ini import os
+
+curl "https://api.groq.com/openai/v1/audio/transcriptions" \
+  -H "Authorization: Bearer ${GROQ_API_KEY}" \
+  -F "model=whisper-large-v3" \
+  -F "file=@./audio.m4a" \
+  -F "temperature=0" \
+  -F "response_format=verbose_json" \
+  -X POST 
+  
+      
+
+ dan bautakn agar apinya di taruh di .env
