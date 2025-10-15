@@ -123,6 +123,10 @@ async def run_bot() -> None:
         await task_queue.stop()
         logger.info("Task queue stopped")
 
+        # Cleanup Telethon session
+        await telethon_downloader.close()
+        logger.info("Telethon session closed")
+
 
 def _build_registry(settings: Settings) -> TranscriberRegistry:
     transcribers: dict[str, object] = {}

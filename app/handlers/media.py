@@ -161,6 +161,47 @@ async def _process_transcription_task(
 
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
         try:
+            # Check cache BEFORE download using Telegram file_id
+            file_unique_id = None
+            cached_result = None
+
+            if transcript_cache:
+                try:
+                    # Get Telegram unique file ID without downloading
+                    file_unique_id = await telethon_downloader.get_file_unique_id(
+                        message.chat.id, message.message_id
+                    )
+
+                    if file_unique_id:
+                        # Check cache using Telegram file ID
+                        cached_result = await transcript_cache.get(
+                            f"tg_{file_unique_id}"
+                        )
+
+                        if cached_result:
+                            logger.info(
+                                "✨✨ Cache HIT by Telegram file_id! Skipping download."
+                            )
+                            text, segments = cached_result
+                            result = TranscriptionResult(text=text, segments=segments)
+                            await message.answer(
+                                f"✨ **Hasil dari cache** (file sudah pernah diproses)!\n\n"
+                                f"📁 File: {meta.display_name}\n"
+                                f"⚡ Proses: Instant dari cache"
+                            )
+                            await _deliver_transcription(message, result)
+                            return
+                        else:
+                            logger.info(
+                                "Cache miss for file_id %s, proceeding with download",
+                                file_unique_id[:16],
+                            )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to check cache by file_id: %s. Continuing with download.",
+                        e,
+                    )
+
             # Download media
             logger.info(
                 "Starting download for %s (%s bytes) in chat %s",
@@ -175,9 +216,9 @@ async def _process_transcription_task(
                 download_path.stat().st_size if download_path.exists() else "unknown",
             )
 
-            # Check cache first
+            # Double-check cache with file hash (in case file_id check failed)
             file_hash = None
-            if transcript_cache:
+            if transcript_cache and not cached_result:
                 file_hash = await audio_optimizer._compute_file_hash(download_path)
                 cached_result = await transcript_cache.get(file_hash)
                 if cached_result:
@@ -248,12 +289,44 @@ async def _process_transcription_task(
             )
             result = await asyncio.to_thread(transcriber.transcribe, prepared_path)
 
-            # Save to cache
-            if transcript_cache and file_hash:
+            # Save to cache with BOTH file_id and file_hash
+            if transcript_cache:
+                # Save with file hash
+                if not file_hash:
+                    file_hash = await audio_optimizer._compute_file_hash(
+                        download_path if download_path.exists() else prepared_path
+                    )
                 await transcript_cache.set(file_hash, result.text, result.segments)
                 logger.info("💾 Cached transcript for hash %s", file_hash[:8])
 
+                # Also save with Telegram file_id for faster future lookups
+                if file_unique_id:
+                    await transcript_cache.set(
+                        f"tg_{file_unique_id}", result.text, result.segments
+                    )
+                    logger.info(
+                        "💾 Cached transcript for file_id %s", file_unique_id[:16]
+                    )
+
             await _deliver_transcription(message, result)
+        except RuntimeError as runtime_err:
+            error_msg = str(runtime_err)
+            if "FloodWait" in error_msg or "tunggu" in error_msg.lower():
+                # FloodWait error from Telegram
+                logger.warning("FloodWait error: %s", error_msg)
+                await message.answer(
+                    "⏳ **Telegram Rate Limit**\n\n"
+                    "Bot sedang dibatasi oleh Telegram karena terlalu banyak request.\n\n"
+                    f"ℹ️ {error_msg}\n\n"
+                    "💡 **Solusi:**\n"
+                    "• Tunggu beberapa saat\n"
+                    "• Coba kirim file lagi nanti\n"
+                    "• File duplikat akan otomatis diambil dari cache"
+                )
+            else:
+                # Other runtime errors
+                logger.exception("Runtime error during processing")
+                await message.answer(f"❌ Error: {error_msg}")
         except ValueError as val_err:
             logger.exception("%s gagal menghasilkan transkrip", provider_display)
             await message.answer(
@@ -279,7 +352,21 @@ async def _process_transcription_task(
                 )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unhandled error while processing media")
-            await message.answer(f"Gagal memproses file: {exc}")
+            error_msg = str(exc)
+            if "FloodWait" in error_msg or "rate limit" in error_msg.lower():
+                await message.answer(
+                    "⏳ Bot sedang dibatasi oleh Telegram.\n"
+                    "Silakan coba lagi dalam beberapa menit.\n\n"
+                    "File yang sama akan otomatis diambil dari cache! ✨"
+                )
+            else:
+                await message.answer(
+                    f"❌ Gagal memproses file: {exc}\n\n"
+                    "💡 Tips:\n"
+                    "• Pastikan file adalah audio/video yang valid\n"
+                    "• Coba file dengan ukuran lebih kecil\n"
+                    "• Gunakan command /start untuk info bot"
+                )
         finally:
             for path in cleanup_paths:
                 try:

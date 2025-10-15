@@ -1,8 +1,19 @@
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
-from ..services import DeepgramModelPreferences, ProviderPreferences, TranscriberRegistry
+from ..services import (
+    DeepgramModelPreferences,
+    ProviderPreferences,
+    TranscriberRegistry,
+)
+from ..services.audio_optimizer import TranscriptCache
+from ..services.queue_service import TaskQueue
 
 router = Router()
 
@@ -19,11 +30,73 @@ async def start(message: Message) -> None:
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
     await message.answer(
-        "Gunakan bot ini dengan mengirimkan atau mem-forward media audio/video. "
-        "Bot akan mengonversi file besar ke mp3 bila diperlukan dan mengirimkan hasil "
-        "transkrip sebagai teks, file .txt, dan .srt. "
-        "Gunakan /provider <groq|deepgram> untuk memilih penyedia transkripsi per chat."
+        "🎵 **Transhades Transcription Bot**\n\n"
+        "**Cara Pakai:**\n"
+        "• Kirim/forward file audio atau video\n"
+        "• Bot akan transkripsi otomatis\n"
+        "• Support hingga 2GB file!\n\n"
+        "**Commands:**\n"
+        "/start - Info bot\n"
+        "/help - Panduan ini\n"
+        "/provider - Pilih provider (Groq/Deepgram)\n"
+        "/status - Cek status bot & cache\n\n"
+        "**Features:**\n"
+        "✨ Smart cache (instant untuk file duplikat)\n"
+        "⚡ 5 concurrent workers\n"
+        "🎵 Auto-compression untuk large files\n"
+        "🔄 Auto-retry jika gagal"
     )
+
+
+@router.message(Command("status"))
+async def status_command(
+    message: Message,
+    transcript_cache: TranscriptCache = None,
+    task_queue: TaskQueue = None,
+) -> None:
+    """Show bot status, cache stats, and queue info."""
+    status_lines = ["🤖 **Bot Status**\n"]
+
+    # Queue stats
+    if task_queue:
+        stats = await task_queue.get_stats()
+        status_lines.append("📊 **Queue Statistics:**")
+        status_lines.append(
+            f"• Active workers: {stats['active_workers']}/{task_queue.max_workers}"
+        )
+        status_lines.append(f"• Queue size: {stats['queue_size']}")
+        status_lines.append(f"• Total tasks: {stats['total_tasks']}")
+        status_lines.append(f"• Completed: {stats['by_status'].get('completed', 0)}")
+        status_lines.append(f"• Failed: {stats['by_status'].get('failed', 0)}")
+        status_lines.append(f"• Processing: {stats['by_status'].get('processing', 0)}")
+
+        if stats.get("avg_processing_time"):
+            status_lines.append(f"• Avg time: {stats['avg_processing_time']:.1f}s")
+        status_lines.append("")
+
+    # Cache stats
+    if transcript_cache:
+        cache_size = len(transcript_cache)
+        cache_max = transcript_cache.max_size
+        cache_pct = (cache_size / cache_max * 100) if cache_max > 0 else 0
+
+        status_lines.append("💾 **Cache Statistics:**")
+        status_lines.append(
+            f"• Cached items: {cache_size}/{cache_max} ({cache_pct:.0f}%)"
+        )
+        status_lines.append(f"• Type: In-memory")
+        status_lines.append("")
+
+        if cache_size > 0:
+            status_lines.append("✨ **Cache Working!**")
+            status_lines.append("File duplikat akan instant dari cache!")
+        else:
+            status_lines.append("ℹ️ Cache kosong - belum ada file yang diproses")
+
+    status_lines.append("\n🚀 **Bot Online & Ready!**")
+    status_lines.append("\n💡 Kirim file audio/video untuk mulai transkripsi")
+
+    await message.answer("\n".join(status_lines))
 
 
 def _build_provider_keyboard(
@@ -50,7 +123,9 @@ def _build_provider_keyboard(
             if current_model == model_code:
                 label = "✅ " + caption
             model_buttons.append(
-                InlineKeyboardButton(text=label, callback_data=f"deepgram_model:{model_code}")
+                InlineKeyboardButton(
+                    text=label, callback_data=f"deepgram_model:{model_code}"
+                )
             )
         keyboard.append(model_buttons)
 

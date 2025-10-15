@@ -5,10 +5,12 @@ Bot Telegram Anda sekarang sudah dioptimasi dengan fitur-fitur canggih yang meni
 ## ✨ Fitur yang Sudah Aktif
 
 ✅ **Transcript Caching** - Hemat 35-40% API calls  
+✅ **Duplicate Detection** - Deteksi file sama SEBELUM download  
 ✅ **Task Queue System** - 5 concurrent users bersamaan  
 ✅ **Audio Streaming** - 40-60% lebih cepat processing  
 ✅ **Smart Compression** - Auto-optimize untuk files >30MB  
 ✅ **Auto-Retry** - Gagal? Retry otomatis 2x  
+✅ **Persistent Session** - No more FloodWait errors  
 
 ---
 
@@ -50,18 +52,27 @@ Anda akan melihat:
 
 ## 📊 Apa yang Berubah?
 
-### 🎯 Cache Hit (File Duplikat)
+### 🎯 Cache Hit (File Duplikat) - SMART DETECTION
 **Sebelum:**
 ```
 User kirim file sama 2x → Diproses 2x (wasted API call)
 Time: 45s + 45s = 90 detik total
 ```
 
-**Sesudah:**
+**Sesudah (NEW!):**
 ```
-User kirim file sama 2x → Pertama: 18s, Kedua: instant dari cache!
-Time: 18s + 2s = 20 detik total (4.5x lebih cepat!)
+User kirim file sama 2x:
+1. Pertama: Download + Process = 18s
+2. Kedua: Deteksi duplikat SEBELUM download = INSTANT! (~1s)
+
+✨ Bot sekarang deteksi file yang sama TANPA download dulu!
+Time: 18s + 1s = 19 detik total (5x lebih cepat!)
 ```
+
+**Cara Kerja:**
+- Bot cek Telegram file_id (unique untuk setiap file)
+- Jika file_id sudah ada di cache → Langsung kirim hasil
+- Tidak perlu download ulang sama sekali!
 
 ### 🔄 Multiple Users
 **Sebelum:**
@@ -197,6 +208,25 @@ INFO  Worker 0 completed task 4f436be1 (processing: 18.2s)
 ---
 
 ## 🐛 Troubleshooting
+
+### Problem: FloodWaitError dari Telegram
+**Gejala:** Bot error dengan pesan "A wait of XXX seconds is required"
+
+**Penyebab:** Telegram membatasi terlalu banyak request
+
+**Solution:**
+```bash
+# Bot sekarang punya session persistent!
+# Session disimpan di: ~/.transhades_session
+
+# Jika masih error, hapus session dan restart:
+rm ~/.transhades_session
+.venv/bin/python -m app.main
+
+# Bot akan re-authenticate sekali, lalu smooth sailing!
+```
+
+**Catatan:** Setelah fix ini, FloodWait jarang terjadi karena bot pakai session yang sama.
 
 ### Problem: Bot tidak mulai
 **Solution:**
