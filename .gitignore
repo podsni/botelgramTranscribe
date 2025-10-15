@@ -22,6 +22,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+transhades_bot*
 
 # Virtual environments
 venv/

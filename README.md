@@ -4,10 +4,13 @@ Bot Telegram ini mentranskripsi audio, voice note, dan video menggunakan Groq Wh
 
 ## Persiapan
 
-1. Salin `.env.example` menjadi `.env` dan sesuaikan nilai token bila diperlukan.
+1. Salin `.env.example` menjadi `.env` dan isi kredensial berikut:
    ```bash
    cp .env.example .env
    ```
+   - `TELEGRAM_BOT_TOKEN`: token bot dari BotFather.
+   - `TELEGRAM_API_ID` dan `TELEGRAM_API_HASH`: kredensial MTProto dari [my.telegram.org](https://my.telegram.org).
+   - `GROQ_API_KEY`: kunci Groq Whisper.
 2. Install dependensi Python (gunakan Python 3.9+).
    ```bash
    python -m venv .venv
@@ -37,5 +40,6 @@ Bot akan mulai menggunakan long polling. Kirim atau forward file audio (mp3, m4a
 - Bot akan mengunduh file media secara sementara ke direktori sistem dan memastikan pembersihan setelah selesai.
 - Struktur modular berada di folder `app/` yang memisahkan konfigurasi, handler Telegram, dan integrasi Groq untuk memudahkan pemeliharaan.
 - Bot akan otomatis mengirim hasil sebagai pesan (maks 4000 karakter) serta lampiran `transcript.txt` dan, bila tersedia, `transcript.srt` tanpa timestamp tambahan di teks utama.
-- Telegram tidak mengizinkan bot mengunduh file lebih besar dari ~20MB; jika batas ini tercapai, Anda perlu mengompresi atau memotong file secara manual sebelum mengirim ulang.
+- Berkat integrasi Telethon (MTProto), bot dapat mengunduh file hingga 2GB. Jika ukuran melebihi 2GB, Anda perlu mengompresi atau memotong file secara manual sebelum mengirim ulang.
 - Bot akan mengonversi media berukuran ≥15MB ke format mp3 menggunakan `ffmpeg` secara otomatis setelah unduhan selesai. Pastikan `ffmpeg` tersedia di lingkungan server.
+- Bot berbasis Aiogram 3 dan Telethon sehingga seluruh alur bersifat asinkron serta efisien untuk unduhan buffer-stream besar.

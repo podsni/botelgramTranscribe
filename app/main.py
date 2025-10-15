@@ -1,43 +1,55 @@
+from __future__ import annotations
+
+import asyncio
 import logging
 
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, filters
+from aiogram import Bot, Dispatcher
+from telethon import TelegramClient
 
 from .config import Settings, load_settings
+from .handlers import build_router
+from .middlewares import DependencyMiddleware
 from .services import GroqTranscriber
-from .telegram_handlers import TelegramBotHandlers
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s | %(message)s"
 
 
-def create_application(settings: Settings) -> Application:
-    transcriber = GroqTranscriber(settings.groq_api_key)
-    handlers = TelegramBotHandlers(transcriber)
-
-    application = ApplicationBuilder().token(settings.telegram_bot_token).build()
-    application.add_handler(CommandHandler("start", handlers.start))
-    application.add_handler(CommandHandler("help", handlers.help_command))
-    application.add_handler(
-        MessageHandler(
-            filters.AUDIO
-            | filters.VOICE
-            | filters.VIDEO
-            | filters.VIDEO_NOTE
-            | filters.Document.AUDIO
-            | filters.Document.VIDEO,
-            handlers.handle_media,
-        )
+async def create_telethon_client(settings: Settings) -> TelegramClient:
+    client = TelegramClient(
+        session="transhades_bot",
+        api_id=settings.telegram_api_id,
+        api_hash=settings.telegram_api_hash,
     )
-    return application
+    await client.start(bot_token=settings.telegram_bot_token)
+    return client
 
 
-def run_polling_bot() -> None:
+async def run_bot() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     settings = load_settings()
-    application = create_application(settings)
 
-    logging.getLogger(__name__).info("Starting Telegram bot...")
-    application.run_polling()
+    bot = Bot(settings.telegram_bot_token)
+    dispatcher = Dispatcher()
+    dispatcher.include_router(build_router())
+
+    transcriber = GroqTranscriber(settings.groq_api_key)
+    telethon_client = await create_telethon_client(settings)
+
+    dependency_middleware = DependencyMiddleware(
+        transcriber=transcriber,
+        telethon_client=telethon_client,
+    )
+    dispatcher.message.middleware.register(dependency_middleware)
+
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        await telethon_client.disconnect()
+
+
+def main() -> None:
+    asyncio.run(run_bot())
 
 
 if __name__ == "__main__":
-    run_polling_bot()
+    main()
