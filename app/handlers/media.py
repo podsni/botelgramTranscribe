@@ -30,6 +30,8 @@ from ..services import (
     TranscriberRegistry,
     TelethonDownloadService,
     TranscriptionResult,
+    TranscriptionDatabase,
+    TranscriptionRecord,
 )
 from ..services.audio_optimizer import AudioOptimizer, TranscriptCache
 from ..services.queue_service import TaskQueue, TranscriptionTask
@@ -61,6 +63,7 @@ async def handle_media(
     audio_optimizer: AudioOptimizer,
     transcript_cache: Optional[TranscriptCache],
     task_queue: TaskQueue,
+    transcription_db: Optional[TranscriptionDatabase] = None,
     compression_threshold_mb: int = 30,
 ) -> None:
     meta = _pick_media(message)
@@ -118,6 +121,7 @@ async def handle_media(
                 deepgram_model_preferences=deepgram_model_preferences,
                 audio_optimizer=audio_optimizer,
                 transcript_cache=transcript_cache,
+                transcription_db=transcription_db,
                 compression_threshold_mb=compression_threshold_mb,
                 meta=meta,
             ),
@@ -152,6 +156,7 @@ async def _process_transcription_task(
     deepgram_model_preferences: DeepgramModelPreferences,
     audio_optimizer: AudioOptimizer,
     transcript_cache: Optional[TranscriptCache],
+    transcription_db: Optional[TranscriptionDatabase],
     compression_threshold_mb: int,
     meta: MediaMeta,
 ) -> None:
@@ -287,7 +292,9 @@ async def _process_transcription_task(
             logger.info(
                 "Starting transcription via %s for %s", provider_display, prepared_path
             )
+            start_time = datetime.utcnow()
             result = await asyncio.to_thread(transcriber.transcribe, prepared_path)
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
 
             # Save to cache with BOTH file_id and file_hash
             if transcript_cache:
@@ -307,6 +314,42 @@ async def _process_transcription_task(
                     logger.info(
                         "💾 Cached transcript for file_id %s", file_unique_id[:16]
                     )
+
+            # Save to database
+            if transcription_db:
+                try:
+                    # Detect language from result if available
+                    detected_language = None
+                    if hasattr(result, "language"):
+                        detected_language = result.language
+
+                    # Get model info
+                    model_name = None
+                    if provider_key == "deepgram":
+                        model_name = deepgram_model_preferences.get(message.chat.id)
+
+                    record = TranscriptionRecord(
+                        user_id=message.from_user.id,
+                        chat_id=message.chat.id,
+                        file_id=file_unique_id or "unknown",
+                        file_name=meta.display_name,
+                        file_size=meta.file_size,
+                        duration=None,  # Duration not available from current metadata
+                        transcript=result.text,
+                        detected_language=detected_language,
+                        provider=provider_key,
+                        model=model_name,
+                        timestamp=datetime.utcnow().isoformat(),
+                        processing_time=processing_time,
+                    )
+                    record_id = transcription_db.add_transcription(record)
+                    logger.info(
+                        "💾 Saved transcription to database (ID: %d) for user %d",
+                        record_id,
+                        message.from_user.id,
+                    )
+                except Exception as e:
+                    logger.error("Failed to save to database: %s", e, exc_info=True)
 
             await _deliver_transcription(message, result)
         except RuntimeError as runtime_err:

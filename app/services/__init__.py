@@ -11,6 +11,9 @@ from .transcription import (
 )
 from .audio_optimizer import AudioOptimizer, TranscriptCache
 from .queue_service import TaskQueue
+from .database import TranscriptionDatabase, TranscriptionRecord
+from .translation import TranslationService, TranslationResult, LANGUAGE_CODES
+from .export import ExportService
 
 __all__ = [
     "GroqTranscriber",
@@ -24,4 +27,10 @@ __all__ = [
     "AudioOptimizer",
     "TranscriptCache",
     "TaskQueue",
+    "TranscriptionDatabase",
+    "TranscriptionRecord",
+    "TranslationService",
+    "TranslationResult",
+    "LANGUAGE_CODES",
+    "ExportService",
 ]

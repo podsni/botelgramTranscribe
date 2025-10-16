@@ -17,6 +17,8 @@ from .services import (
     TelethonDownloadService,
     TranscriberRegistry,
     ProviderPreferences,
+    TranscriptionDatabase,
+    TranslationService,
 )
 from .services.audio_optimizer import AudioOptimizer, TranscriptCache
 from .services.queue_service import TaskQueue
@@ -103,6 +105,17 @@ async def run_bot() -> None:
         settings.queue_rate_limit_per_user,
     )
 
+    # Database
+    transcription_db = TranscriptionDatabase(db_path="transcriptions.db")
+    logger.info("Transcription database initialized")
+
+    # Translation Service
+    translation_service = TranslationService(
+        groq_api_key=settings.groq_api_key,
+        together_api_key=settings.together_api_key,
+    )
+    logger.info("Translation service initialized")
+
     dependency_middleware = DependencyMiddleware(
         transcriber_registry=registry,
         provider_preferences=preferences,
@@ -111,6 +124,8 @@ async def run_bot() -> None:
         audio_optimizer=audio_optimizer,
         transcript_cache=transcript_cache,
         task_queue=task_queue,
+        transcription_db=transcription_db,
+        translation_service=translation_service,
         compression_threshold_mb=settings.audio_compression_threshold_mb,
     )
     dispatcher.message.middleware.register(dependency_middleware)

@@ -2,21 +2,31 @@
 
 Bot Telegram ini mentranskripsi audio, voice note, dan video menggunakan layanan Groq Whisper, Deepgram, atau Together AI (pilih sesuai kebutuhan). Anda dapat mengirim langsung atau me-forward file ke bot dan menerima teks hasil transkripsi.
 
-## 🚀 **NEW! Performance Optimized v2.0**
+## 🎉 **NEW! v2.1 - Advanced Features**
 
-Bot sekarang **3-5x lebih cepat** dengan fitur-fitur canggih:
+Bot sekarang memiliki fitur-fitur canggih untuk produktivitas maksimal:
 
+### 🚀 Performance Features (v2.0)
 ✅ **Transcript Caching** - Hemat 35-40% API calls  
 ✅ **Task Queue System** - 5-10 concurrent users  
 ✅ **Audio Streaming** - 40-60% lebih cepat processing  
 ✅ **Smart Compression** - Auto-optimize files >30MB  
 ✅ **Auto-Retry** - Gagal? Retry otomatis 2x  
 
+### 🌐 Multi-Language & History Features (v2.1)
+✅ **20+ Languages Translation** - Translate hasil ke bahasa lain (ID→EN, EN→ID, dll)  
+✅ **Search & History** - Cari dalam transcript, lihat riwayat 20 file terakhir  
+✅ **Multiple Export Formats** - Download dalam TXT, Markdown, SRT, VTT  
+✅ **SQLite Database** - Semua transcript tersimpan permanen  
+✅ **Statistics** - Track usage, provider, dan bahasa yang digunakan  
+
 **Performance Improvement:**
 - Processing time: 45s → 18s (60% faster)
 - Concurrent users: 1 → 5-10 (5-10x throughput)
 - Success rate: 85% → 98%
 - Cache hit rate: 35-40% (instant untuk file duplikat)
+
+📖 **[Lihat dokumentasi lengkap fitur baru →](NEW_FEATURES.md)**
 
 ## Persiapan
 
@@ -39,7 +49,13 @@ Bot sekarang **3-5x lebih cepat** dengan fitur-fitur canggih:
    pip install -r requirements.txt
    ```
 
-## 🚀 Quick Start (Optimized)
+3. (Opsional) Untuk fitur translation, tambahkan API key ke `.env`:
+   ```bash
+   # Translation akan fallback ke LibreTranslate (free) jika tidak ada key
+   GROQ_API_KEY=gsk_your_key_here  # Recommended untuk translation cepat
+   ```
+
+## 🚀 Quick Start
 
 ### 1. Install Dependencies
 ```bash
@@ -48,6 +64,60 @@ source .venv/bin/activate  # Linux/Mac
 # atau .venv\Scripts\activate untuk Windows
 pip install -r requirements.txt
 ```
+
+### 2. Configure Environment
+Edit `.env` file dengan credentials Anda (lihat section Persiapan di atas)
+
+### 3. Start Bot
+```bash
+python -m app.main
+```
+
+Bot akan otomatis membuat database `transcriptions.db` saat pertama kali dijalankan.
+
+## 📚 Commands
+
+### Basic Commands
+- `/start` - Info bot dan cara penggunaan
+- `/help` - Panduan lengkap dengan semua fitur
+- `/provider` - Pilih provider (Groq/Deepgram/Together)
+- `/status` - Status bot, cache, queue, dan API rotation
+
+### History & Search Commands
+- `/history` - Lihat 20 transkripsi terakhir
+- `/search <keyword>` - Cari dalam transcript (contoh: `/search meeting`)
+- `/stats` - Statistik penggunaan Anda
+
+### Translation Commands
+- `/translate <lang>` - Translate transcript terakhir (contoh: `/translate en`)
+- `/languages` - Lihat semua bahasa yang didukung (20+ bahasa)
+
+### Export Commands
+- `/export` - Export transcript terakhir dalam format TXT/MD/SRT/VTT
+
+## 🎯 Usage Examples
+
+### Basic Transcription
+1. Upload audio/video file ke bot
+2. Bot akan process dan kirim transcript otomatis
+3. File duplikat akan instant dari cache! ✨
+
+### With Translation
+1. Upload audio file → Get transcript
+2. `/translate en` → Get English translation
+3. Click "Download TXT" atau "Download MD" untuk save hasil
+
+### Search & History
+1. `/history` → Lihat semua transkripsi Anda
+2. `/search "important meeting"` → Cari transcript spesifik
+3. `/stats` → Lihat statistik penggunaan
+
+### Export in Multiple Formats
+1. `/export` → Pilih format
+2. **TXT** - Plain text dengan metadata
+3. **Markdown** - Formatted document
+4. **SRT** - Video subtitles
+5. **VTT** - Web subtitles
 
 ### 2. Apply Optimizations (One-time Setup)
 ```bash
